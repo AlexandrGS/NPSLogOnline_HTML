@@ -1,22 +1,28 @@
-﻿#https://github.com/AlexandrGS/NPSLogOnline_HTML
+#https://github.com/AlexandrGS/NPSLogOnline_HTML
 #Анализируя логи Windows NPS-Radius сервера показывает информацию о активных VPN-сессиях. Логи в DTS-формате. Все пользователи появляются примерно через 5 минут работы скрипта
 #Такое время потому что Radius-клиент посялает пакеты о состоянии соединения Radius-серверу примерно каждые 5 минут. Так у моего сервера.
 #
 Param(
-    #Активные файлы NPS-Radius сервера. Должны быть разделены символом из $DelimiterOfFilesList
+    #Папки с активными логами NPS-Radius сервера. Должны быть разделены символом из $DelimiterOfFilesList
     #$LogFiles = '"\\192.168.10.10\c$\Windows\System32\LogFiles\IN2104.log","\\192.168.10.11\c$\Windows\System32\LogFiles\IN2104.log"',
     $LogPath = '"\\192.168.10.10\c$\Windows\System32\LogFiles","\\192.168.10.11\c$\Windows\System32\LogFiles"',
     #ОТКЛЮЧЕНО. Сколько строк лога надо прочесть при старте скрипта. Когда сделал обработку нескольких лог файлов почему то перестало работать
     #$CountFirstReadLines = 10,
     #HTML-файл куда будут записываться результаты
-    $OutHTMLFile = "D:\asitko\OneDrive\Programs\NPSLogOnline_HTML\index.html",
+    $OutHTMLFile = "D:\Programs\NPSLogOnline_HTML\index.html",
+    #Файл куда пишется вывод
+    $OutLogFile = ".\NPSLogOnline_HTML.log",
     #Файл с CSS-стилями для оформления веб-страницы
-    $CssStyleFile = "D:\asitko\OneDrive\Programs\NPSLogOnline_HTML\NPSLogOnline_HTML_style.css",
+    $CssStyleFile = "D:\Programs\NPSLogOnline_HTML\NPSLogOnline_HTML_style.css",
+    #Файл де постійно сохраняються ІР адреси і їх геопозиція
+    $IPGeoLoc_FileName = "C:\inetpub\VPNstat\powershell\IPAndGeoLocation.csv",
     #Период обновления создаваемой HTML страницы в секундах. В HTML-коде страницы. Для браузера
-    $RefreshHTMLPageSec = 10,
+    $RefreshHTMLPageSec = 30,
     #По какому полю упорядочивает выводимые результаты. Допустимые поля берутся из объекта $OneVPNSessionDesc
     $SortVPNSessionsByField = "UserName"
 )
+
+$Proxy = "http://proxy.dp.uz.gov.ua:3128" #Проксі-сервер для доступа в інет
 
 #Символы, которые в строке разделяют названия файлов
 $DelimiterOfFilesList = ",;"
@@ -27,7 +33,7 @@ $MaxTimeOutSec = 2 * $MaxOnlineSec
 
 $StatusOnline  = "Работает"
 $StatusWarning = "Простой"
-$StatusError   = "Превышено время"
+$StatusError   = "Тайм-Аут"
 
 [array]$Script:OnlineVPNSessions = @{}
 
@@ -59,7 +65,9 @@ $Script:isDebugOn = $True
 function PrintDebug($DebugMsg){
     if ($Script:isDebugOn){
         $CurrentDate = Get-Date -Format "dd:MM:yyyy HH:mm:ss"
-        Write-Host $CurrentDate $DebugMsg
+        $Msg = $CurrentDate + " " + $DebugMsg
+#        Write-Host $Msg
+        $Msg | Out-File -FilePath $OutLogFile -Append -Force  #-Encoding utf8 
     }
 
 }
@@ -90,6 +98,7 @@ function DurationSecToHourMinSec ([uint64]$DurationSec){
     Return $Result    
 }
 
+
 #Удалить из массива с VPN сессиями все завершенные сессии
 function PackOnlineVPNSesions(){
     $Script:OnlineVPNSessions = $Script:OnlineVPNSessions  | Where-Object {($_.SessionID -ne "") -and ($_.SessionID -ne $Null ) }
@@ -102,6 +111,136 @@ function ToSecFrom1970([datetime]$DateTime){
     Return $Result
 }
 
+function ExportObjectToCSV ($Object,$CSVFileName) {
+    $Object | Export-CSV -Path $CSVFileName -Delimiter ';' -Encoding UTF8 -NoTypeInformation #-Append
+}
+
+#Импортирует весь CSV-файл и возвращает объект с его содержимым
+function ImportObjectFromCSV($CSVFileName) {
+    $Object = Import-CSV -Path $CSVFileName -Delimiter ';' -Encoding UTF8
+    Return $Object
+}
+
+#----- Геолокация по IP адресу -----
+
+#Флаг включения геолокации
+[bool]$Global:isIPGeoLocationEnable = $True
+#Флаг первой проверки геолокации. Во время первой проверки проверяется связь с сайтом, выдающим геолокацию
+[bool]$Script:isFirstIPGeoLocationTest = $True
+#Содержит результаты предыдущих запросов IP локации в виде @{IP=""; Country=""; City = ""; Latitude = ""; Longitude = ""; ASN = ""; Organization = ""; ISP = ""}
+[array]$Global:IPAndGeoLocation = @{}
+
+$Script:CountHitToIPAndGeoArray = 0
+$Script:CountResolvingIPGeo = 0
+
+#Получает один элемент массива $Global:IPAndGeoLocation, возвращает строку с геопозицией в человеческом виде
+function FormingIPGeoString($IPGeoLocationItem){
+    $Result = $IPGeoLocationItem.Country + ", " + 
+              $IPGeoLocationItem.Region + ", " + 
+              $IPGeoLocationItem.City          #+  ", "
+#              "latitude:" + $IPGeoLocationItem.Latitude + ", " + 
+#              "longitude:" + $IPGeoLocationItem.Longitude + ", " + 
+#              "asn:" + $IPGeoLocationItem.ASN + ", " + 
+#              "org:" + $IPGeoLocationItem.Organization + ", " + 
+#              "isp:" + $IPGeoLocationItem.ISP
+    $OOO1 = $IPGeoLocationItem.Organization
+    if( ($OOO1 -ne "") -or ($OOO1 -ne $null) ){
+        $Result += ", org:" + $OOO1
+    }
+    $OOO2 = $IPGeoLocationItem.ISP
+    if( ($OOO2 -ne "") -or ($OOO2 -ne $null) ){
+        if($OOO1 -ne $OOO2){
+            $Result += ", isp:" + $OOO2
+        }
+    }
+    Return $Result
+}
+
+#Це перший визов функції після старту всього скрипта
+[bool]$Script:isFirstStartOfScript = $True
+
+$Script:CCC = 0
+
+#Слідкуе щоб массив Global:IPAndGeoLocation був заповнен,сохранявся на діск
+function PrepareIPAndGeoLocationArray(){
+    
+    if(-not $Global:isIPGeoLocationEnable){
+        return
+    }
+
+    if( $Script:isFirstStartOfScript ){
+        #Перший визов функції після запуску скрипта
+        $Script:isFirstStartOfScript = $false
+        Clear-Variable -Name IPAndGeoLocation
+        $Global:IPAndGeoLocation = ImportObjectFromCSV $IPGeoLoc_FileName
+        $Script:CCC = $Script:CountResolvingIPGeo
+    }else{
+        #Не перший визов функції після запуску скрипта
+        if(($Script:CountResolvingIPGeo - $Script:CCC) -gt 1) {
+            ExportObjectToCSV $Global:IPAndGeoLocation $IPGeoLoc_FileName
+            $Script:CCC = $Script:CountResolvingIPGeo
+        }
+    }
+}
+
+#Получает IP адрес. Возвращает строку с географичесим положением country region city latitude longitude asn org isp
+function GetIPGeoLocation([string]$IP){
+    [string]$Result = ""
+    
+    if(($IP -eq "0.0.0.0") -or ($IP -eq "") -or ($IP -eq $null)){
+        return ""
+    }
+
+    #При первом вызове проверяем есть ли доступ к сайту где проверяется локация по IP
+    if(($Script:isFirstIPGeoLocationTest) -and ($Global:isIPGeoLocationEnable)){
+        PrintDebug "Проверка связи с сервисом голокации http://ipwhois.app"
+        $FirstTest = [xml](Invoke-RestMethod -method Get -Uri "http://ipwhois.app/xml/8.8.8.8" -Proxy $Proxy -ProxyUseDefaultCredentials) #| Out-Null
+        if($FirstTest.query.success -eq 1){
+            PrintDebug "Попытка проверить связь с сервисом геолокации удалась. Геолокация по IP будет включена. Бесплатно можно проверить до 10000 адресов за месяц"
+        } else {
+            PrintDebug "Попытка проверить связь с сервисом геолокации не удалась. Геолокация по IP будет отключена"
+            $Global:isIPGeoLocationEnable = $False
+        }
+        $Script:isFirstIPGeoLocationTest = $False
+    }
+
+    PrepareIPAndGeoLocationArray
+
+    #Ищем геолокацию IP адреса
+    if($Global:isIPGeoLocationEnable){
+        $isIPInArray = $False
+        ForEach($I in $Global:IPAndGeoLocation){
+            if($I.IP -eq $IP){
+                $Script:CountHitToIPAndGeoArray++
+                $Result = FormingIPGeoString $I
+                $isIPInArray = $True
+            }
+        }
+        if(-not $isIPInArray){
+            $XMLWebRequest = [xml](Invoke-RestMethod -method Get -Uri "http://ipwhois.app/xml/$IP" -Proxy $Proxy -ProxyUseDefaultCredentials)
+            if($XMLWebRequest.query.success -eq 1){
+                $Script:CountResolvingIPGeo++
+#                $Global:IPAndGeoLocation += @{IP=$IP; Country=$XMLWebRequest.query.country; Region = $XMLWebRequest.query.region; City = $XMLWebRequest.query.city; Latitude = $XMLWebRequest.query.latitude; Longitude = $XMLWebRequest.query.longitude; ASN = $XMLWebRequest.query.asn; Organization = $XMLWebRequest.query.org; ISP = $XMLWebRequest.query.isp}
+                $IPAndGeo = New-Object -Type PSObject -Property([ordered]@{
+                    IP      = [string]$IP;
+                    Country = [string]$XMLWebRequest.query.country;
+                    Region  = [string]$XMLWebRequest.query.region;
+                    City    = [string]$XMLWebRequest.query.city;
+                    Latitude = [string]$XMLWebRequest.query.latitude;
+                    Longitude = [string]$XMLWebRequest.query.longitude;
+                    ASN       = [string]$XMLWebRequest.query.asn;
+                    Organization = [string]$XMLWebRequest.query.org;
+                    ISP = [string]$XMLWebRequest.query.isp
+                })
+                $Global:IPAndGeoLocation += $IPAndGeo
+                $Result = FormingIPGeoString $XMLWebRequest.query
+            }
+        }
+    }
+    Return $Result
+}
+
+#----- Конец функций геолокации по IP -----
 
 #Печать результатов каждые $MinSecBetweenPrintResult сек, если сообщения в логе появляются реже, то с каждым сообщением в логе
 [int64]$Script:LastPrintResultSecFrom1970 = GetDateIntSecFrom1970
@@ -143,18 +282,21 @@ function PrintOnlineVPNSessions(){
 
     if( $CurrentSecFrom1970 - $Script:LastPrintResultSecFrom1970 -ge $MinSecBetweenPrintResult ){
         $Script:LastPrintResultSecFrom1970 = $CurrentSecFrom1970
-        PackOnlineVPNSesions
+#        PackOnlineVPNSesions
 #        $Script:OnlineVPNSessions  | Sort-Object -Property $SortVPNSessionsByField | Format-Table -Property UserName,UserDevName,DurationHMS,UserExternalIP,TunnelClientIP,NASServerExternalIP,NASServerInternalIP,RadiusServer,TunnelType,InputOctets,OutputOctets,Status
 #        Write-Host "Всего" $Script:OnlineVPNSessions.Count "сессий на " (Get-Date)
         
+        PrintDebug "Сохраняю в файл $OutHTMLFile"
         $Script:OnlineVPNSessions  | Sort-Object -Property $SortVPNSessionsByField | 
             select @{expression={$_.UserName}; Label="Аккаунт"}, `
                 @{expression={$_.Status}; Label="Статус"}, `
+                @{expression={($_.Company)}; Label="Предприятие"}, `
                 @{expression={$_.UserDevName}; Label="Имя устройства"}, `
-                @{expression={$_.DurationHMS}; Label="Длит. ЧЧ:ММ:СС"}, `
-                @{expression={$_.UserExternalIP}; Label="IP пользователя внешний"}, `
-                @{expression={$_.TunnelClientIP}; Label="IP пользователя внутренний"}, `
+                @{expression={$_.DurationHMS}; Label="Длит чч:мм:сс"}, `
+                @{expression={$_.UserExternalIP}; Label="IP внешний"}, `
+                @{expression={$_.TunnelClientIP}; Label="IP внутренний"}, `
                 @{expression={$_.NASServerExternalIP}; Label="IP NAS внешний"}, `
+                @{expression={$_.UserExternalIPGeolocation}; Label="Геолокация"}, `
                 @{expression={$_.NASServerInternalIP}; Label="IP NAS внутренний"}, `
                 @{expression={$_.RadiusServer}; Label="Radius сервер"}, `
                 @{expression={$_.InputOctets}; Label="Входящих байт"}, `
@@ -178,6 +320,8 @@ function FromFolderToFullPath([string[]]$Folders){
     foreach($Folder in $Folders){
         $FullPath += $Folder + "\in" + ([string](Get-Date).Year).Remove(0,2) + ([string](Get-Date).Month).PadLeft(2,"0") + ".log"
     }
+    $Msg = "Читаем логи из файлов:" + $FullPath
+    PrintDebug $Msg
     return $FullPath
 }
 
@@ -188,14 +332,15 @@ Workflow GetSeveralFilesContent
 {
     Param([string[]] $Files)
     
-    ForEach -parallel ($file in $Files)
-    {
-        while($True){
-            try{
+    while($True){
+        try{
+            ForEach -parallel ($file in $Files) {
                 Get-Content -Path $file -Tail 0 -Wait
             }
-            catch{}
-        }#while($True)
+        }
+        catch{
+            "Error paralel reading"
+        }
     }
 }
 
@@ -224,23 +369,23 @@ function DeleteSessionFromVPNSessionsArray($XMLOneLineLog){
     ForEach($OneVPNSession in $Script:OnlineVPNSessions){
         if($OneVPNSession.SessionID -eq $XMLOneLineLog.Event."Acct-Session-Id"."#text"){
             $OneVPNSession.SessionID = ""
-            $Msg = " Удаляю сессию " + $XMLOneLineLog.Event."Acct-Session-Id"."#text" + " пользователя " + $XMLOneLineLog.Event."User-Name"."#text"
+            $Msg = "Удаляю сессию " + $XMLOneLineLog.Event."Acct-Session-Id"."#text" + " пользователя " + $XMLOneLineLog.Event."User-Name"."#text"
             PrintDebug $Msg
             $isDeleted = $True
             Break
         }
     }
     if(-not $isDeleted){
-        $Msg = " Cессия " + $XMLOneLineLog.Event."Acct-Session-Id"."#text" + " пользователя " + $XMLOneLineLog.Event."User-Name"."#text" + " не найдена для удаления. Если скрипт работает меньше 10 миут, то это нормально если больше 10 мин, то ошибка в скрипте"
+        $Msg = "Cессия " + $XMLOneLineLog.Event."Acct-Session-Id"."#text" + " пользователя " + $XMLOneLineLog.Event."User-Name"."#text" + " не найдена для удаления."
         PrintDebug $Msg
     }
-    #PackOnlineVPNSesions Почему-то при вызове отсюда в массиве остается одна пустая запись. Перенес в другое место
+    PackOnlineVPNSesions #Почему-то при вызове отсюда в массиве остается одна пустая запись. Перенес в другое место
 }
 
 function UpdateVPNSessionsArray([xml]$XMLOneLine){
     $isVPNSessionInArray = $False
     $AcctSessionID = $XMLOneLine.Event."Acct-Session-Id"."#text"
-    $UserName = [string]$XMLOneLine.Event."User-Name"."#text"
+    $UserName = ([string]$XMLOneLine.Event."User-Name"."#text").Split("\")[-1]
     if(($AcctSessionID -eq "") -or ($AcctSessionID -eq $Null)){
 #        Write-Warning "В функцию UpdateVPNSessionsArray получен пакет с пустым атрибутом Acct-Session-Id " 
 #        Write-Host $XMLOneLine
@@ -249,49 +394,53 @@ function UpdateVPNSessionsArray([xml]$XMLOneLine){
     }
     ForEach( $I in $Script:OnlineVPNSessions){
         if( $I.SessionID -eq $AcctSessionID ){
-            PrintDebug " Обновляю сессию  $AcctSessionID  пользователя $UserName"
-            $I.DurationSec  = [int64]$XMLOneLine.Event."Acct-Session-Time"."#text"
+            PrintDebug "Обновляю сессию  $AcctSessionID  пользователя $UserName"
+            $I.DurationSec  = [uint64]$XMLOneLine.Event."Acct-Session-Time"."#text"
             $I.DurationHMS = DurationSecToHourMinSec $I.DurationSec
             $I.RadiusServer        = [string]$XMLOneLine.Event."Computer-Name"."#text"
             if( ($I.TunnelClientIP -eq "") -or ($I.TunnelClientIP -eq $Null) ){
                 $I.TunnelClientIP = [string]$XMLOneLine.Event."Framed-IP-Address"."#text";
             }
-            $I.InputOctets  = [int64]$XMLOneLine.Event."Acct-Input-Octets"."#text"
-            $I.InputPackets = [int64]$XMLOneLine.Event."Acct-Input-Packets"."#text"
-            $I.OutputOctets = [int64]$XMLOneLine.Event."Acct-Output-Octets"."#text"
-            $I.OutputPackets= [int64]$XMLOneLine.Event."Acct-Output-Packets"."#text"
+            $I.InputOctets  = [uint64]$XMLOneLine.Event."Acct-Input-Octets"."#text"
+            $I.InputPackets = [uint64]$XMLOneLine.Event."Acct-Input-Packets"."#text"
+            $I.OutputOctets = [uint64]$XMLOneLine.Event."Acct-Output-Octets"."#text"
+            $I.OutputPackets= [uint64]$XMLOneLine.Event."Acct-Output-Packets"."#text"
             $I.LastDateTimeActivity=[string]$XMLOneLine.Event."Timestamp"."#text"
             $I.LastActivitySecFrom1970 = GetDateIntSecFrom1970
+#            $I.Company = (Get-ADUser -Identity $I.UserName -Properties Company).Company #???Надо ли при каждой записи в лог обновлять компанию акаунта или достаточно один раз при создании сессии
             $I.Status = $StatusOnline + "[0]";
 
             $isVPNSessionInArray = $True
         }
     }
     if( -not $isVPNSessionInArray){
-        PrintDebug " Нашел сессию $AcctSessionID пользователя $UserName"
+        PrintDebug "Нашел сессию $AcctSessionID пользователя $UserName"
         $OneVPNSessionDesc = New-Object -Type PSObject -Property @{
             UserName            = $UserName;             #Имя пользователя этой сессии
             UserDevName         = [string]$XMLOneLine.Event."Tunnel-Client-Auth-ID"."#text"; #Имя устройства VPN-клиента
-            DurationSec         = [int64]$XMLOneLine.Event."Acct-Session-Time"."#text";   #Длительность сессии в секундах. Подсчитывается NAS-сервером
+            DurationSec         = [uint64]$XMLOneLine.Event."Acct-Session-Time"."#text";   #Длительность сессии в секундах. Подсчитывается NAS-сервером
             DurationHMS         = ""; #Длительность сессии в часы:минуты:секунды
             RadiusServer        = [string]$XMLOneLine.Event."Computer-Name"."#text";         #Имя Радиус-сервера, который первым принял эту сессию
             TunnelType          = [string]$XMLOneLine.Event."Tunnel-Assignment-ID"."#text";  #Тип туннеля
             UserExternalIP      = [string]$XMLOneLine.Event."Tunnel-Client-Endpt"."#text";   #Наружный IP адрес VPN-клиента
             NASServerExternalIP = [string]$XMLOneLine.Event."Tunnel-Server-Endpt"."#text";   #Наружный IP адрес NAS сервера-Radius клиента
-#            UserExternalIPGeolocation = [string]"";                             #Географическое расположение IP адреса клиента из поля UserExternalIP
+            UserExternalIPGeolocation = [string]"";                #Географическое расположение IP адреса клиента из поля UserExternalIP
             TunnelClientIP      = [string]$XMLOneLine.Event."Framed-IP-Address"."#text";    #IP адрес VPN-клиента внутри VPN-туннеля
             NASServerInternalIP = [string]$XMLOneLine.Event."NAS-IP-Address"."#text";       #IP адрес NAS сервера-Radius клиента внутри VPN-туннеля
-            InputOctets         = [int64]$XMLOneLine.Event."Acct-Input-Octets"."#text";     #Число входящих байт
-            InputPackets        = [int64]$XMLOneLine.Event."Acct-Input-Packets"."#text";    #Число входящих пакетов
-            OutputOctets        = [int64]$XMLOneLine.Event."Acct-Output-Octets"."#text";    #Число исходящих байт
-            OutputPackets       = [int64]$XMLOneLine.Event."Acct-Output-Packets"."#text";   #Число исходящих пакетов
+            InputOctets         = [uint64]$XMLOneLine.Event."Acct-Input-Octets"."#text";     #Число входящих байт
+            InputPackets        = [uint64]$XMLOneLine.Event."Acct-Input-Packets"."#text";    #Число входящих пакетов
+            OutputOctets        = [uint64]$XMLOneLine.Event."Acct-Output-Octets"."#text";    #Число исходящих байт
+            OutputPackets       = [uint64]$XMLOneLine.Event."Acct-Output-Packets"."#text";   #Число исходящих пакетов
             SessionID           = $AcctSessionID;      #Уникальный номер VPN сессии. Соответствует полю Acct-Session-Id.
                                                        #Если пробел или $Null, то этот объект будет пропускаться при обработке
             LastDateTimeActivity    =[string]$XMLOneLine.Event."Timestamp"."#text"; #Время последней записи в логах для этой сессии.
             LastActivitySecFrom1970 = GetDateIntSecFrom1970 ; #Время последней записи в логах для этой сессии. В секундах с 01.01.1970
+            Company = "";
             Status = $StatusOnline + "[0]";
         }
+        $OneVPNSessionDesc.Company = (Get-ADUser -Identity $OneVPNSessionDesc.UserName -Properties Company).Company
         $OneVPNSessionDesc.DurationHMS = DurationSecToHourMinSec $OneVPNSessionDesc.DurationSec
+        $OneVPNSessionDesc.UserExternalIPGeolocation = GetIPGeoLocation $OneVPNSessionDesc.UserExternalIP
         $Script:OnlineVPNSessions += $OneVPNSessionDesc
     }
 }
@@ -309,10 +458,11 @@ function HandleOneLineLog([string]$OneLineLog){
     PrintOnlineVPNSessions
 }
 
-Write-Host "Анализ DTS-логов NPS-Radius сервера Windows. Показывает онлайн пользователей. Версия от 04.11.2020"
-Write-Host "https://github.com/AlexandrGS/NPSLogOnline_HTML"
-Write-Warning "Всех пользователей покажет примерно через 5-6 минут работы скрипта"
+PrintDebug "Анализ DTS-логов NPS-Radius сервера Windows. Показывает онлайн пользователей. Версия от 04.11.2020"
+PrintDebug "https://github.com/AlexandrGS/NPSLogOnline_HTML"
+PrintDebug "Всех пользователей покажет примерно через 5-6 минут работы скрипта"
 #Get-Content $LogFiles -Wait -Tail $CountFirstReadLines | ForEach-Object { HandleOneLineLog  $_ }
 
 #GetSeveralFilesContent ($LogFiles.Split($DelimiterOfFilesList)) | ForEach-Object { HandleOneLineLog  $_ }
 GetSeveralFilesContent (FromFolderToFullPath $LogPath) | ForEach-Object { HandleOneLineLog  $_ }
+PrintDebug "Завершение работы"
