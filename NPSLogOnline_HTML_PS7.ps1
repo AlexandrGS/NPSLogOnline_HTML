@@ -1,24 +1,25 @@
 #https://github.com/AlexandrGS/NPSLogOnline_HTML
-#Анализируя логи Windows NPS-Radius сервера показывает информацию о активных VPN-сессиях. Логи в DTS-формате. Все пользователи появляются примерно через 5 минут работы скрипта
-#Такое время потому что Radius-клиент посялает пакеты о состоянии соединения Radius-серверу примерно каждые 5 минут. Так у моего сервера.
+#Аналізуе логи Windows NPS-Radius сервера показує інформацію про активні VPN-сесії. Логи у DTS-форматі. Усі користувачі з'являються приблизно через 5 хвилин роботи скрипту
+#Такий час тому що Radius-клієнт надсилає пакети про стан з'єднання Radius-серверу приблизно кожні 5 хвилин. Так працюе мій сервер.
 #
 Param(
-    #Папки с активными логами NPS-Radius сервера. Должны быть разделены символом из $DelimiterOfFilesList
+    #ВИМКНЕНО. Папки с активными логами NPS-Radius сервера. Должны быть разделены символом из $DelimiterOfFilesList
     #$LogFiles = "c:\Windows\System32\LogFiles\in2601.log",
+    #Тека з активними логами NPS-Radius сервера
     $LogPath = "c:\Windows\System32\LogFiles",
-    #ОТКЛЮЧЕНО. Сколько строк лога надо прочесть при старте скрипта. Когда сделал обработку нескольких лог файлов почему то перестало работать
+    #ВИМКНЕНО. Сколько строк лога надо прочесть при старте скрипта. Когда сделал обработку нескольких лог файлов почему то перестало работать
     #$CountFirstReadLines = 10,
-    #HTML-файл куда будут записываться результаты
+    #HTML-файл куди буде записуватися результат
     $OutHTMLFile = "C:\inetpub\vpnstat\www\index.html",
-    #Файл куда пишется вывод
+    #Файл куди пишеться лог скріпта
     $OutLogFile = "C:\inetpub\vpnstat\log\NPSLogOnline_HTML.log",
-    #Файл с CSS-стилями для оформления веб-страницы
+    #Файл с CSS-стилями для оформлення веб-сторінки
     $CssStyleFile = "c:\vpnstat\NPSLogOnline_HTML_style.css",
     #Файл де постійно сохраняються ІР адреси і їх геопозиція
     $IPGeoLoc_FileName = "C:\inetpub\vpnstat\data\IPAndGeoLocation.csv",
-    #Период обновления создаваемой HTML страницы в секундах. В HTML-коде страницы. Для браузера
+    #Період оновлення створюемой HTML сторінки в секундах. В HTML-коде сторінки. Для браузера
     $RefreshHTMLPageSec = 30,
-    #По какому полю упорядочивает выводимые результаты. Допустимые поля берутся из объекта $OneVPNSessionDesc
+    #По якому полю впорядковуються результати на веб-сторніці. Допустимі поля беруться з об'єкта  $OneVPNSessionDesc
     $SortVPNSessionsByField = "UserName",
     #Проксі-сервер для доступа в інет
     $Proxy = "http://proxy.dp.uz.gov.ua:3128" 
@@ -28,7 +29,7 @@ Param(
 #$DelimiterOfFilesList = ",;"
 
 #Кодування HTML-сторінки
-$CodingHTMLPage = "UTF-8"
+$EncodingHTMLPage = "UTF-8"
 
 #HTML-сторінка формуеться скріптом мінімум кожні $MinSecBetweenPrintResult сек, 
 #Якщо повідомлення в логе з'являються рідше, то з кожним повідомленям в логе
@@ -38,10 +39,11 @@ $CodingHTMLPage = "UTF-8"
 #Стан сесій в залежності від того скільки часу пройшло з момента останьої появи в логах
 $MaxOnlineSec  = 6*60              #До цього часу сесія вважаеться в нормальному стані
 $MaxTimeOutSec = 2 * $MaxOnlineSec #До цього часу сесія вважаеться в стані попередження
-$MaxDeleteSec  = 3 * $MaxOnlineSec #Після цього часу сесія помічаеться як та що потрібно видалити
+#З MaxTimeOutSec до MaxDeleteSec сесія вважаеться в стані помилки
+$MaxDeleteSec  = 4 * $MaxOnlineSec #Після цього часу сесія помічаеться як та що потрібно видалити
 #Те що пишеться на HTML-сторінку в залежності від перемених MaxOnlineSec MaxTimeOutSec MaxDeleteSec
-$StatusOnline  = "Работает"
-$StatusWarning = "Простой"
+$StatusOnline  = "Працюе"
+$StatusWarning = "Простоює"
 $StatusError   = "Тайм-Аут"
 
 #Для праці скріпта потрібна мінімум ця версія Powershell.
@@ -90,7 +92,7 @@ function PrintDebug($DebugMsg){
     }
 
     if ($Script:isDebugOn){
-        $Msg | Out-File -FilePath $OutLogFile -Append -Force  -Encoding $CodingHTMLPage
+        $Msg | Out-File -FilePath $OutLogFile -Append -Force  -Encoding $EncodingHTMLPage
     }
 
 }
@@ -281,9 +283,9 @@ function PrintOnlineVPNSessions(){
     [int64]$CurrentSecFrom1970 = GetDateIntSecFrom1970
 
     [string]$HTMLHeader = "<HEAD>
-        <Title> Активные VPN сессии</Title>
+        <Title> Активні VPN сесії</Title>
         <meta http-equiv=""refresh"" content=""$RefreshHTMLPageSec"">
-        <meta charset=""$CodingHTMLPage"">
+        <meta charset=""$EncodingHTMLPage"">
     </HEAD>"
 #         <style>
 #            table { 
@@ -299,19 +301,20 @@ function PrintOnlineVPNSessions(){
 #            } 
 #        </style>   
     $CurrentDate = Get-Date -Format "dd MMMM yyyy HH:mm:ss"
-    $PreHTMLContent = "<H4><Left>Активные VPN сессии на $CurrentDate</Left></H4>"
+    $PreHTMLContent = "<H4><Left>Активні VPN сесії на $CurrentDate</Left></H4>"
    
     $CountOfActiveVPNSessions = $Script:OnlineVPNSessions.Count
-    $PostHTMLContent = "<H4>Всего $CountOfActiveVPNSessions сессии</H4>
+    $PostHTMLContent = "<H4>Всього $CountOfActiveVPNSessions сесії</H4>
     <Left>
-    В столбце ""Статус"" всегда стоит слово ""$StatusOnline"", ""$StatusWarning"" или ""$StatusError"" и цифра в квадратных скобках.<br>
-    Цифра означает сколько секунд назад в логах Radius-сервера было последнее появление этой сессии.<br>
-    Слово ""$StatusOnline"" означает что это было меньше $MaxOnlineSec сек назад.<br>
-    ""$StatusWarning"" что больше чем $MaxOnlineSec сек но меньше чем $MaxTimeOutSec сек назад,<br>
-    ""$StatusError"" говорит что последнее появление в логах этой сессии было больше $MaxTimeOutSec сек назад и с этой сесией творится подозрительное<br>
-    При проблемах с провайдером появляются пачки таких сессий <hr>
-    При появлении-прекращении VPN сессии информация о ней обновляется примерно каждые $RefreshHTMLPageSec сек.<br>
-    Инфо о существующей сессии обновляется примерно каждае 5.5 минут"
+    В стовпці ""Статус"" завжди стоїть слово ""$StatusOnline"", ""$StatusWarning"" или ""$StatusError"" та цифра у квадратних дужках.<br>
+    Цифра означає скільки секунд тому в логах Radius-сервера була остання поява цієї сесії.<br>
+    Слово ""$StatusOnline"" означає що це було менш за $MaxOnlineSec сек тому.<br>
+    ""$StatusWarning"" що більше за $MaxOnlineSec сек но менш за $MaxTimeOutSec сек тому,<br>
+    ""$StatusError"" каже що остання поява в логах цієї сесії була більшою за $MaxTimeOutSec сік тому і з цією сесіяю твориться підозріле<br>
+    При проблемах із провайдером з'являються пачки таких сесій.<br>
+    Якщо остання поява сесії в логах була більш $MaxDeleteSec то інфо осесії видаляеться.<hr>
+    При появі-припиненні VPN сесії інформація про неї оновлюється приблизно кожні $RefreshHTMLPageSec сек.<br>
+    Інфо про існуючу сесію оновлюється приблизно кожне 5.5 хвилин"
 
     if( $CurrentSecFrom1970 - $Script:LastPrintResultSecFrom1970 -ge $MinSecBetweenPrintResult ){
         $Script:LastPrintResultSecFrom1970 = $CurrentSecFrom1970
@@ -323,17 +326,17 @@ function PrintOnlineVPNSessions(){
         $Script:OnlineVPNSessions  | Sort-Object -Property $SortVPNSessionsByField | 
             select @{expression={$_.UserName}; Label="Аккаунт"}, `
                 @{expression={$_.Status}; Label="Статус"}, `
-                @{expression={($_.Company)}; Label="Предприятие"}, `
-                @{expression={$_.UserDevName}; Label="Имя устройства"}, `
-                @{expression={$_.DurationHMS}; Label="Длит чч:мм:сс"}, `
-                @{expression={$_.UserExternalIP}; Label="IP внешний"}, `
-                @{expression={$_.TunnelClientIP}; Label="IP внутренний"}, `
-                @{expression={$_.NASServerExternalIP}; Label="IP NAS внешний"}, `
-                @{expression={$_.UserExternalIPGeolocation}; Label="Геолокация"}, `
-                @{expression={$_.NASServerInternalIP}; Label="IP NAS внутренний"}, `
+                @{expression={($_.Company)}; Label="Підприемство"}, `
+                @{expression={$_.UserDevName}; Label="Ім'я пристрою"}, `
+                @{expression={$_.DurationHMS}; Label="Тривалість гг:хх:сс"}, `
+                @{expression={$_.UserExternalIP}; Label="IP зовнішній"}, `
+                @{expression={$_.TunnelClientIP}; Label="IP внутрішній"}, `
+                @{expression={$_.NASServerExternalIP}; Label="IP NAS зовнішній"}, `
+                @{expression={$_.UserExternalIPGeolocation}; Label="Геолокація"}, `
+                @{expression={$_.NASServerInternalIP}; Label="IP NAS внутрішній"}, `
                 @{expression={$_.RadiusServer}; Label="Radius сервер"}, `
-                @{expression={$_.InputOctets}; Label="Входящих байт"}, `
-                @{expression={$_.OutputOctets}; Label="Исходящих байт"} `
+                @{expression={$_.InputOctets}; Label="Вхідних байт"}, `
+                @{expression={$_.OutputOctets}; Label="Вихідних байт"} `
                 |
             ConvertTo-Html -As Table -Head $HTMLHeader -PreContent $PreHTMLContent -PostContent $PostHTMLContent -CssUri $CssStyleFile | Out-File $OutHTMLFile 
 
