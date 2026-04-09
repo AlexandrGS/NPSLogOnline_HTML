@@ -22,7 +22,7 @@ Param(
     #По якому полю впорядковуються результати на веб-сторніці. Допустимі поля беруться з об'єкта  $OneVPNSessionDesc
     $SortVPNSessionsByField = "UserName",
     #Проксі-сервер для доступа в інет
-    $Proxy = "http://proxy.domain.com:3128" 
+    $Proxy = "http://proxy.domain.ua:3128" 
 )
 
 #Символы, которые в строке разделяют названия файлов
@@ -158,6 +158,41 @@ function ImportObjectFromCSV($CSVFileName) {
 $Script:CountHitToIPAndGeoArray = 0
 $Script:CountResolvingIPGeo = 0
 
+#Приватні IP адреси
+[string[]]$PrivateIPs = 
+"10.",
+"192.168.",
+"172.16.",
+"172.17.",
+"172.18.",
+"172.19.",
+"172.20.",
+"172.21.",
+"172.22.",
+"172.23.",
+"172.24.",
+"172.25.",
+"172.26.",
+"172.27.",
+"172.28.",
+"172.29.",
+"172.30.",
+"172.31."
+
+#Отримуе ІР адресу. Повертае истину якщо ІР з приватної мережі
+function boolPrivateIP($IP){
+    [bool]$boolIsPrivateIP = $false
+
+    foreach($I in $PrivateIPs){
+        if($IP.StartsWith($I)){
+            $boolIsPrivateIP = $true
+            break
+        }
+    }
+
+    return $boolIsPrivateIP
+}
+
 #Получает один элемент массива $Global:IPAndGeoLocation, возвращает строку с геопозицией в человеческом виде
 function FormingIPGeoString($IPGeoLocationItem){
     $Result = $IPGeoLocationItem.Country + ", " + 
@@ -212,7 +247,7 @@ function PrepareIPAndGeoLocationArray(){
 function GetIPGeoLocation([string]$IP){
     [string]$Result = ""
     
-    if(($IP -eq "0.0.0.0") -or ($IP -eq "") -or ($IP -eq $null)){
+    if(($IP -eq "0.0.0.0") -or ($IP -eq "") -or ($IP -eq $null) -or (boolPrivateIP $IP)){
         return ""
     }
 
