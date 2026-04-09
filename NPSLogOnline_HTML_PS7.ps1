@@ -22,7 +22,7 @@ Param(
     #По якому полю впорядковуються результати на веб-сторніці. Допустимі поля беруться з об'єкта  $OneVPNSessionDesc
     $SortVPNSessionsByField = "UserName",
     #Проксі-сервер для доступа в інет
-    $Proxy = "http://proxy.dp.uz.gov.ua:3128" 
+    $Proxy = "http://proxy.domain.com:3128" 
 )
 
 #Символы, которые в строке разделяют названия файлов
@@ -37,14 +37,14 @@ $EncodingHTMLPage = "UTF-8"
 [int]$MinSecBetweenPrintResult = 5
 
 #Стан сесій в залежності від того скільки часу пройшло з момента останьої появи в логах
-$MaxOnlineSec  = 6*60              #До цього часу сесія вважаеться в нормальному стані
-$MaxTimeOutSec = 2 * $MaxOnlineSec #До цього часу сесія вважаеться в стані попередження
+[uint32]$MaxOnlineSec  = 6*60              #До цього часу сесія вважаеться в нормальному стані
+[uint32]$MaxTimeOutSec = 1.25 * $MaxOnlineSec #До цього часу сесія вважаеться в стані попередження
 #З MaxTimeOutSec до MaxDeleteSec сесія вважаеться в стані помилки
-$MaxDeleteSec  = 4 * $MaxOnlineSec #Після цього часу сесія помічаеться як та що потрібно видалити
+[uint32]$MaxDeleteSec  = 1.25 * $MaxTimeOutSec #Після цього часу сесія помічаеться як та що потрібно видалити
 #Те що пишеться на HTML-сторінку в залежності від перемених MaxOnlineSec MaxTimeOutSec MaxDeleteSec
 $StatusOnline  = "Працюе"
-$StatusWarning = "Простоює"
-$StatusError   = "Тайм-Аут"
+$StatusWarning = "Простой"
+$StatusError   = "Помилка"
 
 #Для праці скріпта потрібна мінімум ця версія Powershell.
 #Це повязано з паралельними потоками в ForEach-Object -ThrottleLimit -Parallel
